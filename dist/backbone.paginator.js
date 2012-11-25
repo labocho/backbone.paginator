@@ -1,4 +1,4 @@
-/*! backbone.paginator - v0.1.54 - 8/18/2012
+/*! backbone.paginator - v0.1.54 - 11/26/2012
 * http://github.com/addyosmani/backbone.paginator
 * Copyright (c) 2012 Addy Osmani; Licensed MIT */
 
@@ -19,42 +19,61 @@ Backbone.Paginator = (function ( Backbone, _, $ ) {
 	//
 	Paginator.clientPager = Backbone.Collection.extend({
 	
+        // DEFAULTS FOR SORTING & FILTERING
+        useDiacriticsPlugin: true, // use diacritics plugin if available
+        useLevenshteinPlugin: true, // use levenshtein plugin if available
+        sortColumn: "",
+        sortDirection: "desc",
+        lastSortColumn: "",
+        fieldFilterRules: [],
+        lastFieldFilterRules: [],
+        filterFields: "",
+        filterExpression: "",
+        lastFilterExpression: "",
+        
+        //DEFAULT PAGINATOR UI VALUES
+        defaults_ui: {
+            firstPage: 0,
+            currentPage: 1,
+            perPage: 5,
+            totalPages: 10
+        }, 
+	
 		// Default values used when sorting and/or filtering.
 		initialize: function(){
-			this.useDiacriticsPlugin = true; // use diacritics plugin if available
-			this.useLevenshteinPlugin = true; // use levenshtein plugin if available
-		
-			this.sortColumn = "";
-			this.sortDirection = "desc";
-			this.lastSortColumn = "";
+            //LISTEN FOR ADD & REMOVE EVENTS THEN REMOVE MODELS FROM ORGINAL MODELS
+            this.on('add', this.addModel, this); 
+            this.on('remove', this.removeModel, this); 
 
-			this.fieldFilterRules = [];
-			this.lastFieldFilterRules = [];
-
-			this.filterFields = "";
-			this.filterExpression = "";
-			this.lastFilterExpression = "";
+            // SET DEFAULT VALUES (ALLOWS YOU TO POPULATE PAGINATOR MAUNALLY)
+            this.setDefaults(); 
 		},
+		
+        
+        setDefaults: function() {
+            // SET DEFAULT UI SETTINGS 
+            var options = _.defaults(this.paginator_ui, this.defaults_ui); 
+            
+            //UPDATE GLOBAL UI SETTINGS
+            _.defaults(this, options); 
+        }, 
+        
+        addModel: function(model) {
+            this.origModels.push(model); 
+        }, 
+        
+        removeModel: function(model) {
+            var index = _.indexOf(this.origModels, model); 
+        
+            this.origModels.splice(index, 1);
+        }, 
 
 		sync: function ( method, model, options ) {
+        var self = this;
 
-			var self = this;
-
-			// Create default values if no others are specified
-			_.defaults(self.paginator_ui, {
-				firstPage: 0,
-				currentPage: 1,
-				perPage: 5,
-				totalPages: 10
-			});
+            // SET DEFAULT VALUES
+            this.setDefaults(); 
 			
-			// Change scope of 'paginator_ui' object values
-			_.each(self.paginator_ui, function(value, key) {
-				if( _.isUndefined(self[key]) ) {
-					self[key] = self.paginator_ui[key];
-				}
-			});
-		
 			// Some values could be functions, let's make sure
 			// to change their scope too and run them
 			var queryAttributes = {};
@@ -84,19 +103,19 @@ Backbone.Paginator = (function ( Backbone, _, $ ) {
 			});
 
 			queryOptions = _.extend(queryOptions, {
-				jsonpCallback: 'callback',
 				data: decodeURIComponent($.param(queryAttributes)),
 				processData: false,
 				url: _.result(queryOptions, 'url')
 			}, options);
 			
 			return $.ajax( queryOptions );
-
 		},
 
 		nextPage: function () {
-			this.currentPage = ++this.currentPage;
-			this.pager();
+            if(this.currentPage < this.information.totalPages) {
+                this.currentPage = ++this.currentPage;
+                this.pager();
+			}
 		},
 
 		previousPage: function () {
@@ -148,31 +167,36 @@ Backbone.Paginator = (function ( Backbone, _, $ ) {
 				this.fieldFilterRules = fieldFilterRules;
 				this.pager();
 				this.info();
+			// if all the filters are removed, we should save the last filter
+			// and then let the list reset to it's original state.
+			} else {
+				this.lastFieldFilterRules = this.fieldFilterRules;
+				this.fieldFilterRules = '';
+				this.pager();
+				this.info();
 			}
 		},
 
 		// doFakeFieldFilter can be used to get the number of models that will remain
 		// after calling setFieldFilter with a filter rule(s)
-		doFakeFieldFilter: function ( fieldFilterRules ) {
-			if( !_.isEmpty( fieldFilterRules ) ) {
-				var bkp_lastFieldFilterRules = this.lastFieldFilterRules;
-				var bkp_fieldFilterRules = this.fieldFilterRules;
+		doFakeFieldFilter: function ( rules ) {
+			if( !_.isEmpty( rules ) ) {
+				var testModels = this.origModels;
+				if (testModels === undefined) {
+					testModels = this.models;
+				}
 
-				this.lastFieldFilterRules = this.fieldFilterRules;
-				this.fieldFilterRules = fieldFilterRules;
-				this.pager();
-				this.info();
+				testModels = this._fieldFilter(testModels, rules);
 
-				var cmodels = this.models.length;
-
-				this.lastFieldFilterRules = bkp_lastFieldFilterRules;
-				this.fieldFilterRules = bkp_fieldFilterRules;
-				this.pager();
-				this.info();
+				// To comply with current behavior, also filter by any previously defined setFilter rules.
+				if ( this.filterExpression !== "" ) {
+					testModels = this._filter(testModels, this.filterFields, this.filterExpression);
+				}
 
 				// Return size
-				return cmodels;
+				return testModels.length;
 			}
+      
 		},
     
 		// setFilter is used to filter the current model. After
@@ -197,28 +221,23 @@ Backbone.Paginator = (function ( Backbone, _, $ ) {
 		// remain after calling setFilter with a `fields` and `filter` args. 
 		doFakeFilter: function ( fields, filter ) {
 			if( fields !== undefined && filter !== undefined ){
-				var bkp_filterFields = this.filterFields;
-				var bkp_lastFilterExpression = this.lastFilterExpression;
-				var bkp_filterExpression = this.filterExpression;
+				var testModels = this.origModels;
+				if (testModels === undefined) {
+					testModels = this.models;
+				}
 
-				this.filterFields = fields;
-				this.lastFilterExpression = this.filterExpression;
-				this.filterExpression = filter;
-				this.pager();
-				this.info();
+				// To comply with current behavior, first filter by any previously defined setFieldFilter rules.
+				if ( !_.isEmpty( this.fieldFilterRules ) ) {
+					testModels = this._fieldFilter(testModels, this.fieldFilterRules);
+				}
 
-				var cmodels = this.models.length;
-
-				this.filterFields = bkp_filterFields;
-				this.lastFilterExpression = bkp_lastFilterExpression;
-				this.filterExpression = bkp_filterExpression;
-				this.pager();
-				this.info();
+				testModels = this._filter(testModels, fields, filter);
 
 				// Return size
-				return cmodels;
+				return testModels.length;
 			}
 		},
+
 
 		// pager is used to sort, filter and show the data 
 		// you expect the library to display.
@@ -227,7 +246,6 @@ Backbone.Paginator = (function ( Backbone, _, $ ) {
 				disp = this.perPage,
 				start = (self.currentPage - 1) * disp,
 				stop = start + disp;
-
 			// Saving the original models collection is important
 			// as we could need to sort or filter, and we don't want
 			// to loose the data we fetched from the server.
@@ -445,6 +463,14 @@ Backbone.Paginator = (function ( Backbone, _, $ ) {
 							should_push = true;
 						}
 
+					}else if(rule.type === "containsAllOf"){
+						if( _.isArray( rule.value ) && 
+							_.isArray(model.get(rule.field)) &&
+							_.intersection( rule.value, model.get(rule.field)).length === rule.value.length
+						) {
+								should_push = true;
+						}
+
 					// The field's value is required to match the regular expression
 					}else if(rule.type === "pattern"){
 						if( model.get(rule.field).toString().match(rule.value) ) {
@@ -513,7 +539,7 @@ Backbone.Paginator = (function ( Backbone, _, $ ) {
 			if( filter === '' || !_.isString(filter) ) {
 				return models;
 			} else {
-				var words = filter.match(/\w+/ig);
+				var words = _.map(filter.match(/\w+/ig), function(element) { return element.toLowerCase(); });
 				var pattern = "(" + _.uniq(words).join("|") + ")";
 				var regexp = new RegExp(pattern, "igm");
 			}
@@ -630,8 +656,7 @@ Backbone.Paginator = (function ( Backbone, _, $ ) {
 			// How many adjacent pages should be shown on each side?
 			var ADJACENT = 3,
 				ADJACENTx2 = ADJACENT * 2,
-				LASTPAGE = Math.ceil(info.totalRecords / info.perPage),
-				LPM1 = -1;
+				LASTPAGE = Math.ceil(info.totalRecords / info.perPage); 
 
 			if (LASTPAGE > 1) {
 				// not enough pages to bother breaking it up
@@ -737,7 +762,6 @@ Backbone.Paginator = (function ( Backbone, _, $ ) {
 			}
 
 			queryOptions = _.extend(queryOptions, {
-				jsonpCallback: 'callback',
 				processData: false,
 				url: _.result(queryOptions, 'url')
 			}, options);
@@ -810,8 +834,18 @@ Backbone.Paginator = (function ( Backbone, _, $ ) {
 				firstPage: this.firstPage,
 				totalPages: this.totalPages,
 				lastPage: this.totalPages,
-				perPage: this.perPage
+				perPage: this.perPage,
+				hasPrevious:false,
+				hasNext:false
 			};
+
+			if (this.currentPage > 1) {
+				info.hasPrevious = this.currentPage - 1;
+			}
+
+			if (this.currentPage < info.totalPages) {
+				info.hasNext = this.currentPage + 1;
+			}
 
 			this.information = info;
 			return info;
